@@ -31,9 +31,10 @@ jobs:
           }
 
           # Fetch the test cases that Buildkite Test Engine has labelled "flaky" on the master branch.
-          # The period must be set explicitly: the API default is too short and drops tests that have not run on
           # master in the last day. We don't expect many flaky tests, so only the first 100 are fetched.
-          bk 'tests?labels=flaky&branch=master&period=28days&per_page=100' > tests.json
+          # Go subtests ("TestFoo/Bar") are skipped, we only open issue for top-level tests.
+          bk 'tests?labels=flaky&branch=master&period=28days&per_page=100' \
+            | jq '[.[] | select(.name | contains("/") | not)]' > tests.json
           if [ "$(jq length tests.json)" -eq 0 ]; then
             echo "No flaky tests found"
             exit 0
@@ -49,16 +50,17 @@ jobs:
             "https://api.buildkite.com/v2/organizations/ray-project/pipelines/ray-ecosystem-ci-kuberay-ci/builds?branch=master&per_page=20" \
             | jq -r '.[].id' > builds.txt
           for build in $(cat builds.txt); do
-            # failed_executions does not include the build id, so it is attached from the outer loop.
             for run in $(bk "runs?build_id=$build" | jq -r '.[].id'); do
-              bk "runs/$run/failed_executions" | jq --arg build "$build" 'map(. + {build_id: $build})'
+              bk "runs/$run/failed_executions"
             done
           done |
-            # Group the failed executions by test id into {test_id: ["<commit sha> <build URL>", ...]},
+            # Group the failed executions by test id into {test_id: ["<commit sha> <job URL>", ...]},
             # so each issue below can list the builds its test failed in.
+            # The build URL and job id are execution tags (set by run_env in .buildkite/hooks/pre-exit),
+            # and "#<job id>" makes the build page open that job directly.
             jq -s 'add // []
                 | group_by(.test_id)
-                | map({(.[0].test_id): map(.commit_sha[0:7] + " https://buildkite.com/ray-project/ray-ecosystem-ci-kuberay-ci/builds/" + .build_id) | unique})
+                | map({(.[0].test_id): map(.commit_sha[0:7] + " " + .tags["build.url"] + "#" + .tags["build.job_id"]) | unique})
                 | add // {}' > builds.json
 
           # Skip tests that already have an open issue. The test URL in the body is the dedup key.
