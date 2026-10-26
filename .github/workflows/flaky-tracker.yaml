@@ -45,10 +45,11 @@ jobs:
           # We look at runs rather than build state because a flaky job is usually retried, which turns the build green.
           # Since this workflow runs daily, new flaky tests always have recent failures, so scanning only the 20 most recent
           # builds is enough, and it keeps us under the 50 requests/minute API rate limit.
-          for build in $(curl -sfS -H "Authorization: Bearer $BUILDKITE_API_TOKEN" \
+          curl -sfS -H "Authorization: Bearer $BUILDKITE_API_TOKEN" \
+            "https://api.buildkite.com/v2/organizations/ray-project/pipelines/ray-ecosystem-ci-kuberay-ci/builds?branch=master&per_page=20" \
+            | jq -r '.[].id' > builds.txt
+          for build in $(cat builds.txt); do
             # failed_executions does not include the build id, so it is attached from the outer loop.
-              "https://api.buildkite.com/v2/organizations/ray-project/pipelines/ray-ecosystem-ci-kuberay-ci/builds?branch=master&per_page=20" \
-              | jq -r '.[].id'); do
             for run in $(bk "runs?build_id=$build" | jq -r '.[].id'); do
               bk "runs/$run/failed_executions" | jq --arg build "$build" 'map(. + {build_id: $build})'
             done
